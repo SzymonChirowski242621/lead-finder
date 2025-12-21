@@ -1,6 +1,6 @@
 # Lead Finder (The Robotic Intern) 🤖
 
-A specialized B2B lead generation tool designed to automate the process of finding contact information for business niches in Poland and the Netherlands.
+A specialized B2B lead generation tool designed to automate the process of finding contact information for business niches.
 
 It acts as a "Robotic Intern": it searches for companies, visits their websites, scans for contact details (Emails, Phone Numbers, Addresses), and saves everything to a neat CSV file.
 
