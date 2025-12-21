@@ -44,33 +44,21 @@ IGNORE_DOMAINS = [
 
 
 def extract_clean_domain(url: str) -> str:
-    """
-    Extracts 'https://example.com' from 'https://www.example.com/page?q=1'.
-    """
     try:
         parsed = urlparse(url)
         domain = parsed.netloc
-        protocol = parsed.scheme
-        if protocol:
-            domain = f"{protocol}://{domain}"
-        # Handle cases where url might be missing scheme (e.g. "example.com")
         if not domain:
             domain = parsed.path
-
-        # Remove 'www.' if present for cleaner storage
         if domain.startswith("www."):
             domain = domain[4:]
-
         return domain
     except Exception:
         return ""
 
 
 def is_valid_domain(domain: str) -> bool:
-    """Check if the DOMAIN is not in our ignore list."""
     if not domain:
         return False
-
     domain_lower = domain.lower()
     for ignored in IGNORE_DOMAINS:
         if ignored in domain_lower:
@@ -79,43 +67,28 @@ def is_valid_domain(domain: str) -> bool:
 
 
 def get_search_results(query: str, num_results: int = 10) -> List[str]:
-    """
-    Perform a search using DuckDuckGo and return a CLEAN list of domains.
-    """
     print(f"Searching for: {query}...")
-    # Use a set to automatically handle duplicates (e.g. home page + contact page)
     results: Set[str] = set()
 
-    try:
-        with DDGS() as ddgs:
-            # We ask for 2x results because we expect to filter out junk
-            search_generator = ddgs.text(
-                query,
-                max_results=num_results * 2,
-            )
+    # NOTE: No try/except block here! We want errors (like missing libraries)
+    # to bubble up so the GUI can log them as "CRITICAL ERROR".
+    with DDGS() as ddgs:
+        search_generator = ddgs.text(query, max_results=num_results * 2)
 
-            for result in search_generator:
-                url = result.get("href")
-                if not url:
-                    continue
+        for result in search_generator:
+            url = result.get("href")
+            if not url:
+                continue
 
-                # 1. Extract Domain
-                domain = extract_clean_domain(url)
+            domain = extract_clean_domain(url)
 
-                # 2. Filter & Deduplicate
-                if is_valid_domain(domain):
-                    if domain not in results:
-                        results.add(domain)
-                        print(f"Found (Clean): {domain}")
-                else:
-                    print(f"Skipped (Junk): {domain}")
+            if is_valid_domain(domain):
+                if domain not in results:
+                    results.add(domain)
+                    print(f"Found (Clean): {domain}")
 
-                # Stop once we have enough CLEAN results
-                if len(results) >= num_results:
-                    break
-
-    except Exception as e:
-        print(f"Error during search: {e}")
+            if len(results) >= num_results:
+                break
 
     return list(results)
 
