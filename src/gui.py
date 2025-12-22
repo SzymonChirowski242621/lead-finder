@@ -1,21 +1,23 @@
 import csv
 import os
+import queue
 import threading
 import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
-from typing import Dict, List
+from typing import Dict, List, Optional
 
-# Import your existing logic
+# Import modules
 from search_clients import get_search_results
 from scraper import scrape_domain, setup_driver
+from event_scraper import get_event_domains
 
 
 class LeadScraperApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("Robotic Intern - Lead Scraper")
-        self.root.geometry("600x600")
+        self.root.title("Robotic Intern - Lead Scraper (Multi-Threaded)")
+        self.root.geometry("750x750")
 
         style = ttk.Style()
         style.configure("TButton", font=("Helvetica", 10), padding=5)
@@ -24,33 +26,85 @@ class LeadScraperApp:
         input_frame = ttk.LabelFrame(root, text="Configuration", padding=10)
         input_frame.pack(fill="x", padx=10, pady=5)
 
-        ttk.Label(input_frame, text="Search Query:").pack(anchor="w")
-        self.keyword_entry = ttk.Entry(input_frame, width=50)
-        self.keyword_entry.pack(fill="x", pady=(0, 10))
-        self.keyword_entry.insert(0, "Firma budowlana Warszawa")
+        # 1. Mode Selection
+        ttk.Label(input_frame, text="Source Mode:").pack(anchor="w")
+        self.mode_var = tk.StringVar(value="Keyword Search")
+        self.mode_combo = ttk.Combobox(
+            input_frame,
+            textvariable=self.mode_var,
+            values=[
+                "Keyword Search",
+                "Scrape Event URL",
+                "Import Domain List (CSV/TXT)",
+            ],
+            state="readonly",
+            width=40,
+        )
+        self.mode_combo.pack(anchor="w", pady=(0, 10))
+        self.mode_combo.bind("<<ComboboxSelected>>", self.toggle_inputs)
 
-        ttk.Label(input_frame, text="Max Results:").pack(anchor="w")
-        self.limit_entry = ttk.Entry(input_frame, width=15)
-        self.limit_entry.pack(anchor="w", pady=(0, 10))
-        self.limit_entry.insert(0, "5")
+        # 2. Main Input Frame (Changes based on mode)
+        self.dynamic_frame = ttk.Frame(input_frame)
+        self.dynamic_frame.pack(fill="x", pady=(0, 10))
 
-        ttk.Label(input_frame, text="Save Location:").pack(anchor="w")
-        file_frame = ttk.Frame(input_frame)
-        file_frame.pack(fill="x", pady=(0, 10))
+        # Initialize Inputs
+        self.input_entry = ttk.Entry(self.dynamic_frame, width=50)
+        self.input_label = ttk.Label(self.dynamic_frame, text="Search Query:")
+        self.browse_btn = ttk.Button(
+            self.dynamic_frame, text="Browse...", command=self.browse_import_file
+        )
 
-        self.filepath_var = tk.StringVar()
-        self.file_entry = ttk.Entry(file_frame, textvariable=self.filepath_var)
-        self.file_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        # Limit Input & Thread Input
+        self.settings_frame = ttk.Frame(input_frame)
+        self.settings_frame.pack(anchor="w", pady=(0, 10))
 
-        ttk.Button(file_frame, text="Browse...", command=self.browse_file).pack(
+        # Max Results (Only for Keyword mode)
+        self.limit_lbl = ttk.Label(self.settings_frame, text="Max Results:")
+        self.limit_entry = ttk.Entry(self.settings_frame, width=10)
+        self.limit_entry.insert(0, "50")
+
+        # Threads (New!)
+        ttk.Label(self.settings_frame, text="   Active Bots (Threads):").pack(
+            side="left"
+        )
+        self.thread_entry = ttk.Entry(self.settings_frame, width=5)
+        self.thread_entry.insert(0, "4")
+        self.thread_entry.pack(side="left", padx=5)
+
+        # Bind key release to check value dynamically
+        self.thread_entry.bind("<KeyRelease>", self.update_thread_warning)
+
+        # Dynamic Warning Label
+        self.warning_label = tk.Label(
+            self.settings_frame,
+            text="✅ Safe Mode",
+            fg="green",
+            font=("Helvetica", 9, "bold"),
+        )
+        self.warning_label.pack(side="left", padx=10)
+
+        # Default View
+        self.toggle_inputs()
+
+        # 3. Save Location
+        ttk.Label(input_frame, text="Save Results To:").pack(anchor="w")
+        save_file_row = ttk.Frame(input_frame)
+        save_file_row.pack(fill="x", pady=(0, 10))
+
+        self.save_path_var = tk.StringVar()
+        self.save_entry = ttk.Entry(save_file_row, textvariable=self.save_path_var)
+        self.save_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
+
+        ttk.Button(save_file_row, text="Browse...", command=self.browse_save_file).pack(
             side="right"
         )
         self.generate_default_filename()
 
+        # Start Button
         self.start_btn = ttk.Button(
-            input_frame, text="Start Scraping", command=self.start_thread
+            input_frame, text="Start Robotic Intern Fleet", command=self.start_thread
         )
-        self.start_btn.pack(fill="x", pady=5)
+        self.start_btn.pack(fill="x", pady=10)
 
         # --- Log Section ---
         log_frame = ttk.LabelFrame(root, text="Process Log", padding=10)
@@ -67,11 +121,69 @@ class LeadScraperApp:
         )
         self.status_bar.pack(fill="x", side="bottom")
 
+    def update_thread_warning(self, event: Optional[tk.Event] = None) -> None:
+        """Updates the warning label based on thread count."""
+        try:
+            val_str = self.thread_entry.get()
+            if not val_str:
+                self.warning_label.config(text="", fg="black")
+                return
+
+            val = int(val_str)
+
+            if val <= 4:
+                self.warning_label.config(text="✅ Safe Mode (Low RAM)", fg="green")
+            elif 5 <= val <= 9:
+                self.warning_label.config(
+                    text="⚠️ High Performance (Fans might spin)", fg="#d35400"
+                )  # Dark Orange
+            else:
+                self.warning_label.config(text="🔥 DANGER: May freeze PC!", fg="red")
+        except ValueError:
+            self.warning_label.config(text="❌ Invalid Number", fg="red")
+
+    def toggle_inputs(self, event: Optional[tk.Event] = None) -> None:
+        """Redraws the input fields based on the selected mode."""
+        mode = self.mode_var.get()
+
+        # Clear dynamic frame
+        for widget in self.dynamic_frame.winfo_children():
+            widget.pack_forget()
+
+        # Reset specific settings visibility
+        self.limit_lbl.pack_forget()
+        self.limit_entry.pack_forget()
+
+        if mode == "Keyword Search":
+            self.input_label.config(text="Search Query:")
+            self.input_label.pack(anchor="w")
+            self.input_entry.delete(0, tk.END)
+            self.input_entry.insert(0, "Firma budowlana Warszawa")
+            self.input_entry.pack(fill="x")
+
+            # Show Max Results field
+            self.limit_lbl.pack(side="left")
+            self.limit_entry.pack(side="left", padx=5)
+
+        elif mode == "Scrape Event URL":
+            self.input_label.config(text="Event Website URL:")
+            self.input_label.pack(anchor="w")
+            self.input_entry.delete(0, tk.END)
+            self.input_entry.insert(0, "https://trakoexpo.com/wystawcy")
+            self.input_entry.pack(fill="x")
+
+        elif "Import" in mode:
+            self.input_label.config(text="Select File (.csv/.txt):")
+            self.input_label.pack(anchor="w")
+            self.input_entry.delete(0, tk.END)
+            self.input_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
+            self.browse_btn.pack(side="right")
+
     def generate_default_filename(self) -> None:
         default_name = f"leads_{int(time.time())}.csv"
-        self.filepath_var.set(os.path.join(os.getcwd(), default_name))
+        self.save_path_var.set(os.path.join(os.getcwd(), default_name))
 
-    def browse_file(self) -> None:
+    def browse_save_file(self) -> None:
         filename = filedialog.asksaveasfilename(
             defaultextension=".csv",
             filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")],
@@ -79,7 +191,16 @@ class LeadScraperApp:
             title="Save Leads As",
         )
         if filename:
-            self.filepath_var.set(filename)
+            self.save_path_var.set(filename)
+
+    def browse_import_file(self) -> None:
+        filename = filedialog.askopenfilename(
+            filetypes=[("CSV/TXT Files", "*.csv *.txt"), ("All Files", "*.*")],
+            title="Select Domain List",
+        )
+        if filename:
+            self.input_entry.delete(0, tk.END)
+            self.input_entry.insert(0, filename)
 
     def log(self, message: str) -> None:
         def _update() -> None:
@@ -91,64 +212,159 @@ class LeadScraperApp:
         self.root.after(0, _update)
 
     def start_thread(self) -> None:
-        keyword = self.keyword_entry.get()
-        filepath = self.filepath_var.get()
-        try:
-            limit = int(self.limit_entry.get())
-        except ValueError:
-            messagebox.showerror("Error", "Limit must be a number.")
+        mode = self.mode_var.get()
+        input_val = self.input_entry.get()
+        save_path = self.save_path_var.get()
+        limit = 0
+        threads = 1
+
+        # Validations
+        if not input_val:
+            messagebox.showerror("Error", "Input cannot be empty.")
             return
 
+        try:
+            threads = int(self.thread_entry.get())
+            if threads < 1:
+                threads = 1
+            # Explicit confirmation if user ignores the Red Warning
+            if threads >= 10:
+                if not messagebox.askyesno(
+                    "Warning",
+                    f"⚠️ You chose {threads} bots.\n\n"
+                    "This requires massive RAM and CPU power.\n"
+                    "Your computer might freeze.\n\n"
+                    "Are you sure you want to continue?",
+                ):
+                    return
+        except ValueError:
+            messagebox.showerror("Error", "Threads must be a number.")
+            return
+
+        if mode == "Keyword Search":
+            try:
+                limit = int(self.limit_entry.get())
+            except ValueError:
+                messagebox.showerror("Error", "Limit must be a number.")
+                return
+
         self.start_btn.config(state="disabled")
-        self.status_var.set("Running...")
+        self.status_var.set(f"Running with {threads} bots...")
         self.log_area.config(state="normal")
         self.log_area.delete(1.0, tk.END)
         self.log_area.config(state="disabled")
 
         thread = threading.Thread(
-            target=self.run_process, args=(keyword, limit, filepath), daemon=True
+            target=self.run_process,
+            args=(mode, input_val, limit, threads, save_path),
+            daemon=True,
         )
         thread.start()
 
-    def run_process(self, keyword: str, limit: int, filepath: str) -> None:
+    def run_process(
+        self, mode: str, input_val: str, limit: int, num_threads: int, save_path: str
+    ) -> None:
         results: List[Dict[str, str]] = []
+        domains: List[str] = []
+
         try:
-            self.log(f"--- Phase 1: Finding Companies for '{keyword}' ---")
-            domains = get_search_results(keyword, num_results=limit)
-            self.log(f"Found {len(domains)} unique companies.")
+            # --- PHASE 1: ACQUIRE DOMAINS ---
+            if mode == "Keyword Search":
+                self.log(f"--- Phase 1: Keyword Search '{input_val}' ---")
+                domains = get_search_results(input_val, num_results=limit)
+
+            elif mode == "Scrape Event URL":
+                self.log("--- Phase 1: Scraping Event Site ---")
+                domains = get_event_domains(input_val, log_callback=self.log)
+
+            elif "Import" in mode:
+                self.log("--- Phase 1: Loading File ---")
+                try:
+                    with open(input_val, "r", encoding="utf-8") as f:
+                        reader = csv.reader(f)
+                        for row in reader:
+                            if row:
+                                clean = (
+                                    row[0]
+                                    .replace("https://", "")
+                                    .replace("www.", "")
+                                    .strip()
+                                )
+                                if clean and "." in clean:
+                                    domains.append(clean)
+                    self.log(f"Loaded {len(domains)} domains.")
+                except Exception as e:
+                    self.log(f"File Error: {e}")
+                    return
 
             if not domains:
                 self.log("No domains found. Stopping.")
                 return
 
-            self.log("\n--- Phase 2: Extracting Contact Info ---")
-            driver = setup_driver()
-            try:
-                for i, domain in enumerate(domains):
-                    self.log(f"[{i + 1}/{len(domains)}] Visiting {domain}...")
-                    data = scrape_domain(driver, domain)
+            # --- PHASE 2: MULTI-THREADED SCRAPING ---
+            self.log(f"\n--- Phase 2: Launching {num_threads} Bots ---")
 
-                    row = {
-                        "Domain": domain,
-                        "Emails": ", ".join(data["emails"]),
-                        "Phones": ", ".join(data["phones"]),
-                        "Address Snippet": (
-                            list(data["address"])[0] if data["address"] else ""
-                        ),
-                    }
-                    results.append(row)
+            domain_queue: queue.Queue[str] = queue.Queue()
+            for d in domains:
+                domain_queue.put(d)
 
-                    if data["emails"]:
-                        self.log(f"   + Emails: {row['Emails']}")
-                    if data["phones"]:
-                        self.log(f"   + Phones: {row['Phones']}")
-                    time.sleep(1)
-            finally:
-                driver.quit()
-                self.log("Browser closed.")
+            # Thread-safe results list
+            results_lock = threading.Lock()
 
-            self.save_to_csv(results, filepath)
-            self.log(f"\n[SUCCESS] Saved data to: {filepath}")
+            # The Worker Function
+            def worker(bot_id: int) -> None:
+                driver = setup_driver()
+                try:
+                    while True:
+                        try:
+                            # Get next domain, don't wait if empty
+                            domain = domain_queue.get_nowait()
+                        except queue.Empty:
+                            break  # Queue is empty, bot is done
+
+                        self.log(f"[Bot-{bot_id}] Visiting {domain}...")
+                        try:
+                            data = scrape_domain(driver, domain)
+
+                            addr_list = list(data["address"])
+                            row = {
+                                "Domain": domain,
+                                "Emails": ", ".join(data["emails"]),
+                                "Phones": ", ".join(data["phones"]),
+                                "Address Snippet": addr_list[0] if addr_list else "",
+                            }
+
+                            with results_lock:
+                                results.append(row)
+
+                            if data["emails"]:
+                                self.log(f"[Bot-{bot_id}] + Email: {row['Emails']}")
+                            if data["phones"]:
+                                self.log(f"[Bot-{bot_id}] + Phone: {row['Phones']}")
+
+                        except Exception as e:
+                            self.log(f"[Bot-{bot_id}] Error: {e}")
+                        finally:
+                            domain_queue.task_done()
+                except Exception as e:
+                    self.log(f"[Bot-{bot_id}] CRASHED: {e}")
+                finally:
+                    driver.quit()
+
+            # Spawn Threads
+            threads_list = []
+            for i in range(num_threads):
+                t = threading.Thread(target=worker, args=(i + 1,))
+                t.start()
+                threads_list.append(t)
+
+            # Wait for all threads
+            for t in threads_list:
+                t.join()
+
+            self.log("All bots finished.")
+            self.save_to_csv(results, save_path)
+            self.log(f"\n[SUCCESS] Saved {len(results)} leads to: {save_path}")
             messagebox.showinfo("Success", f"Done! Saved {len(results)} leads.")
 
         except Exception as e:
@@ -157,12 +373,13 @@ class LeadScraperApp:
         finally:
             self.root.after(0, lambda: self.start_btn.config(state="normal"))
             self.root.after(0, lambda: self.status_var.set("Ready"))
-            self.root.after(0, self.generate_default_filename)
 
     def save_to_csv(self, data: List[Dict[str, str]], filename: str) -> None:
         if not data:
             return
         headers = ["Domain", "Emails", "Phones", "Address Snippet"]
+        # 'w' mode overwrites. For incremental, we'd need more logic,
+        # but for this batch approach, overwriting at the end is fine.
         with open(filename, mode="w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=headers)
             writer.writeheader()
