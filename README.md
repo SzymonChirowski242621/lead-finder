@@ -1,107 +1,133 @@
 # Lead Finder (The Robotic Intern) 🤖
 
-A specialized B2B lead generation tool designed to automate the process of finding contact information for business niches.
+A specialized B2B lead generation tool designed to automate the process of finding contact information for business niches and trade show exhibitors.
 
-It acts as a "Robotic Intern": it searches for companies, visits their websites, scans for contact details (Emails, Phone Numbers, Addresses), and saves everything to a neat CSV file.
+It acts as a **Fleet of Robotic Interns**: it searches for companies, visits their websites simultaneously (multi-threaded), scans for contact details (emails, phone numbers, addresses), and saves everything to a neat CSV file.
 
 ---
 
 ## 🚀 Features
 
-* **Smart Search:** Uses DuckDuckGo to find company domains while avoiding Google's anti-bot bans.
-* **Junk Filtering:** Automatically ignores directories (Oferteo, Yelp, OLX), social media, and aggregators to focus on *real* company websites.
-* **Deep Scraping:** Visits homepages and sub-pages (e.g., `/kontakt`, `/about`, `/o-nas`) to find hidden details.
-* **Polish-Optimized:** Specialized Regex patterns to catch Polish phone formats (landlines & mobile) and addresses via Zip Codes.
-* **Battery-Included:** Simple "Click-to-Run" launcher (`start.bat`) that handles installation automatically.
+* **⚡ Fleet Mode (Multi-Threading):**
+  Launches multiple browsers (bots) at once to scrape 5x–10x faster. Includes a smart *Traffic Light* warning system to prevent PC freezes.
+
+* **🌍 Universal Event Scraper:**
+  Specialized mode to scrape exhibitor lists from trade show websites. Handles hidden **iframes** and waits for you to clear cookies manually.
+
+* **Smart Search:**
+  Uses DuckDuckGo to find company domains while avoiding Google anti bot bans.
+
+* **Junk Filtering:**
+  Automatically ignores directories (Oferteo, Yelp, OLX), social media, and aggregators to focus on real company websites.
+
+* **Battery Included:**
+  Simple click to run launcher (`start.bat`) that handles installation automatically.
 
 ---
 
 ## 📦 How to Use (For Users)
 
-**Prerequisites:**
-1.  **Google Chrome** must be installed.
-2.  **Python** (3.10 or newer) must be installed. [Download Here](https://www.python.org/downloads/) (Make sure to check *"Add Python to PATH"* during installation).
+### Prerequisites
 
-**Running the Tool:**
+1. **Google Chrome** must be installed.
+2. **Python 3.10 or newer** must be installed
+   Download: [https://www.python.org/downloads/](https://www.python.org/downloads/)
+   Make sure to check **Add Python to PATH** during installation.
 
-1.  **Get the Code:**
-    * Click the green **Code** button on this page and select **Download ZIP** (then extract it).
-    * *OR* Run in terminal: `git clone https://github.com/SzymonChirowski242621/lead-finder.git` and navigate into the folder.
+---
 
-2.  **Start the App:**
-    * Open the folder.
-    * Double-click the **`start.bat`** file.
-    * *Note: The first time you run it, it will take 1-2 minutes to install necessary libraries.*
+### Running the Tool
 
-3.  **Use the Interface:**
-    * **Search Query:** Enter a niche (e.g., *"Hurtownia zabawek Poznań"*).
-    * **Max Results:** How many companies to find (start with 5-10 to test).
-    * **Save Location:** Choose where to save your `.csv` file.
-    * Click **Start Scraping**.
+#### 1. Get the Code
+
+* Click the green **Code** button and select **Download ZIP**, then extract it
+* Or clone via terminal:
+
+```
+git clone https://github.com/SzymonChirowski242621/lead-finder.git
+```
+
+#### 2. Start the App
+
+* Double click **start.bat**
+* First run may take 1–2 minutes to install dependencies
+
+#### 3. Choose Your Mode
+
+**Option A: Keyword Search**
+
+* Enter a niche (e.g. `construction companies in Berlin`)
+* Set **Max Results** (e.g. 50)
+
+**Option B: Scrape Event URL**
+
+* Paste an exhibitor list URL (e.g. [https://example-trade-show.com/exhibitors](https://example-trade-show.com/exhibitors))
+* A browser window will open
+* Manually accept cookies and scroll until the list is visible (follow on-screen instructions in the pop-up)
+* Click **OK** so the bots can take over
+
+#### 4. Configure the Fleet
+
+**Active Bots**
+
+* ✅ 1–4: Safe mode (recommended for laptops)
+* ⚠️ 5–9: High performance (8 bots requires around 16GB of free RAM)
+* 🔥 10+: Danger zone (may freeze your PC)
+
+#### 5. Start
+
+* Click **Start Robotic Intern Fleet**
+* Watch logs as bots work in parallel
+* Results are saved as a `.csv` file
+* Done! You can import the CSV file into Excel for easy viewing.
 
 ---
 
 ## 🛠️ Developer Setup
 
-If you want to contribute or modify the code, this project follows modern Python standards using strict linting.
-
 ### 1. Installation
-This project supports both standard `pip` and `uv` (faster).
 
-```bash
-# Clone the repository
+```
 git clone https://github.com/SzymonChirowski242621/lead-finder.git
 cd lead-finder
 
-# Install dependencies (Standard way)
 pip install -r requirements.txt
+```
 
-# OR (Modern way with uv)
+Or using **uv**:
+
+```
 uv sync
-
 ```
 
-### 2. Project Structure
+---
 
-```text
-lead-finder/
-├── src/
-│   ├── gui.py             # The Tkinter User Interface
-│   ├── main.py            # CLI Entry point (optional)
-│   ├── scraper.py         # Selenium logic & Regex extraction
-│   └── search_clients.py  # DuckDuckGo search & Domain filtering
-├── start.bat              # Auto-installer & Launcher for end-users
-├── requirements.txt       # Production dependencies
-└── README.md              # Documentation
+### 2. Code Quality
 
 ```
-
-### 3. Code Quality
-
-The code is enforced with strict linting rules. Before committing changes, run:
-
-```bash
-# Install hooks
 pre-commit install
-
-# Run checks manually
 pre-commit run --all-files
-
 ```
 
-* **Black:** Code formatting
-* **Flake8:** Style guide enforcement
-* **Mypy:** Static type checking
+Tools used:
+
+* **Black** – formatting
+* **Flake8** – style
+* **Mypy** – static typing
+
+---
+
+## 🍻 Support
+
+If this tool saved you time (or money on leads), you can buy me a beer when you meet me in person! Cheers! 🍺
 
 ---
 
 ## ⚠️ Legal & Ethical Notice
 
-* **GDPR Compliance:** This tool collects public business data. In the EU, emailing generic business addresses (`info@company.com`) is generally permissible for B2B outreach, but emailing personal addresses (`name.surname@company.com`) requires consent.
-* **Terms of Service:** Automated scraping may violate the ToS of certain websites. Use responsibly. The bot includes built-in delays (`time.sleep`) to be polite to servers.
-* **License:** This project is open-source under the MIT License. Use at your own risk. See `LICENSE` file for details.
+* **GDPR:**
+  Collects publicly available business data. Generic business emails are generally allowed for B2B outreach in the EU. Personal emails might require consent.
 
----
-## 🍻 Support
-
-If this tool saved you time (or money on leads), you can buy me a beer when you meet me in person! Cheers! 🍺
+* **Terms of Service:**
+  Automated scraping may violate website ToS. Use responsibly.
+* **License:** This project is open-source under the MIT License. Use at your own risk. See LICENSE file for details.
