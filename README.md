@@ -34,6 +34,17 @@ It acts as a **Fleet of Robotic Interns**: it searches for companies, visits the
    Download: [https://www.python.org/downloads/](https://www.python.org/downloads/)
    Make sure to check **Add Python to PATH** during installation.
 
+### 🟢 For Windows Users
+1.  Double-click **`start.bat`**.
+2.  Wait for the installation to finish.
+3.  The app will open automatically.
+
+### 🍎 For macOS Users
+1.  Open the folder.
+2.  **First time only:** You might need to allow the script to run.
+    * Open Terminal, type `chmod +x ` (with a space at the end), drag the `start.command` file into the window, and hit Enter.
+3.  Double-click **`start.command`**.
+4.  The app will open automatically.
 ---
 
 ### Running the Tool
