@@ -1,9 +1,10 @@
 import logging
 import os
 import sys
+import time
 import tkinter.messagebox
 from typing import Callable, List, Set
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlencode, parse_qs, urlunparse
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -36,7 +37,7 @@ def setup_driver() -> webdriver.Chrome:
 def clean_domain(url: str) -> str:
     """Extracts just the 'company.com' part from a messy link."""
     try:
-        if not url or "javascript" in url or "mailto" in url:
+        if not url or "javascript" in url.lower() or "mailto" in url.lower():
             return ""
         parsed = urlparse(url)
         domain = parsed.netloc
@@ -51,80 +52,156 @@ def scan_page_for_links(driver: webdriver.Chrome) -> Set[str]:
     """Grabs all links from the current view."""
     found = set()
     elements = driver.find_elements(By.TAG_NAME, "a")
+
+    try:
+        current_host = urlparse(driver.current_url).netloc.replace("www.", "")
+    except Exception:
+        current_host = ""
+
     for el in elements:
         try:
             url = el.get_attribute("href")
+            if not url:
+                continue
+
             domain = clean_domain(url)
-            # Filter out the event's own links (avoid self-loops)
-            current_host = driver.current_url.split("/")[2]
+
+            # Strategy 1: External Website
             if domain and domain not in current_host:
                 found.add(domain)
+
+            # Strategy 2: Internal Profile Page
+            elif domain and domain in current_host:
+                keywords = [
+                    "detail",
+                    "profile",
+                    "exhibitor",
+                    "wystawca",
+                    "company",
+                    "entry",
+                ]
+                if any(k in url.lower() for k in keywords):
+                    found.add(url)
+
         except Exception:
             continue
     return found
 
 
+def try_pagination_click(
+    driver: webdriver.Chrome, log_callback: Callable[[str], None]
+) -> bool:
+    """Fallback: Attempts to find and click the 'Next' button."""
+    xpaths = [
+        "//a[contains(@class, 'next')]",
+        "//li[contains(@class, 'next')]/a",
+        "//button[contains(@class, 'next')]",
+        "//a[contains(@aria-label, 'Next')]",
+        "//a[contains(text(), 'Next')]",
+        "//a[contains(text(), '>')]",
+    ]
+
+    for xpath in xpaths:
+        try:
+            next_btn = driver.find_element(By.XPATH, xpath)
+            if next_btn.is_displayed():
+                log_callback(f"   >>> Clicking 'Next' button ({xpath})...")
+                driver.execute_script(
+                    "arguments[0].scrollIntoView({block: 'center'});", next_btn
+                )
+                time.sleep(1)
+                driver.execute_script("arguments[0].click();", next_btn)
+                time.sleep(5)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def get_next_page_url(base_url: str, page_num: int) -> str:
+    """Updates the 'page' query parameter in a URL."""
+    parsed = urlparse(base_url)
+    query = parse_qs(parsed.query)
+    query["page"] = [str(page_num)]
+    new_query = urlencode(query, doseq=True)
+    return urlunparse(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            parsed.params,
+            new_query,
+            parsed.fragment,
+        )
+    )
+
+
 def get_event_domains(
-    target_url: str, log_callback: Callable[[str], None] = print
+    target_url: str, max_pages: int = 5, log_callback: Callable[[str], None] = print
 ) -> List[str]:
-    """
-    Visits an event URL, hunts for iframes,
-    and returns a list of unique company domains.
-    """
     if not target_url.startswith("http"):
         target_url = "https://" + target_url
 
     driver = setup_driver()
     all_domains: Set[str] = set()
 
+    # DETECT PAGINATION MODE
+    # If URL contains "page=", we use URL manipulation mode.
+    use_url_pagination = "page=" in target_url
+    if use_url_pagination:
+        log_callback(f"Detected URL pagination mode (Max: {max_pages} pages)")
+
     try:
-        log_callback(f"Visiting event page: {target_url}")
-        driver.get(target_url)
+        if not use_url_pagination:
+            # Standard Mode (Click Buttons)
+            log_callback(f"Visiting: {target_url}")
+            driver.get(target_url)
+            log_callback("⏳ Waiting for manual setup...")
+            tkinter.messagebox.showinfo(
+                "Browser Paused",
+                "Please setup the page (Cookies, Scroll).\nClick OK to start.",
+            )
 
-        # --- PAUSE FOR USER ---
-        log_callback("⏳ Waiting for you to setup the page...")
+        for page_num in range(1, max_pages + 1):
+            if use_url_pagination:
+                # URL Mode: Navigate directly
+                current_url = get_next_page_url(target_url, page_num)
+                log_callback(f"--- Visiting Page {page_num}: {current_url} ---")
+                driver.get(current_url)
+                if page_num == 1:
+                    time.sleep(5)  # Wait longer on first page
+                else:
+                    time.sleep(3)
+            else:
+                # Button Mode
+                log_callback(f"--- Processing Page {page_num} ---")
 
-        # This will freeze the script until you click OK
-        tkinter.messagebox.showinfo(
-            "Browser Paused",
-            "Please go to the Chrome window:\n"
-            "1. Accept Cookies.\n"
-            "2. Scroll down so the Exhibitor List is VISIBLE.\n"
-            "3. Wait for the list to fully load.\n\n"
-            "Click OK here when ready to scrape.",
-        )
+            # Scrape
+            new_links = scan_page_for_links(driver)
+            log_callback(f"   Found {len(new_links)} links.")
+            all_domains.update(new_links)
 
-        log_callback("Resuming scan...")
-        # ----------------------
+            # Check iframes
+            iframes = driver.find_elements(By.TAG_NAME, "iframe")
+            if iframes:
+                for i, iframe in enumerate(iframes):
+                    try:
+                        driver.switch_to.frame(iframe)
+                        iframe_links = scan_page_for_links(driver)
+                        if iframe_links:
+                            all_domains.update(iframe_links)
+                        driver.switch_to.default_content()
+                    except Exception:
+                        driver.switch_to.default_content()
 
-        # --- STRATEGY 1: Scrape Main Page ---
-        log_callback("Scanning main page for links...")
-        main_links = scan_page_for_links(driver)
-        log_callback(f"Found {len(main_links)} links on main page.")
-        all_domains.update(main_links)
-
-        # --- STRATEGY 2: Iframe Hunting ---
-        iframes = driver.find_elements(By.TAG_NAME, "iframe")
-        log_callback(f"Found {len(iframes)} iframes. checking them...")
-
-        for i, iframe in enumerate(iframes):
-            try:
-                # Scroll iframe into view just in case
-                driver.execute_script("arguments[0].scrollIntoView(true);", iframe)
-
-                driver.switch_to.frame(iframe)
-                iframe_links = scan_page_for_links(driver)
-                if iframe_links:
-                    log_callback(
-                        f"   [Iframe {i + 1}] Found {len(iframe_links)} links!"
-                    )
-                    all_domains.update(iframe_links)
-                driver.switch_to.default_content()
-            except Exception:
-                driver.switch_to.default_content()
+            # Handle Transition
+            if not use_url_pagination:
+                if not try_pagination_click(driver, log_callback):
+                    log_callback("--- No 'Next' button found. Stopping. ---")
+                    break
 
     except Exception as e:
-        log_callback(f"Error extracting event domains: {e}")
+        log_callback(f"Error: {e}")
     finally:
         driver.quit()
 
