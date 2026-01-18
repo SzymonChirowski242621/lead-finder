@@ -17,7 +17,7 @@ class LeadScraperApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("Robotic Intern - Lead Scraper (Multi-Threaded)")
-        self.root.geometry("750x750")
+        self.root.geometry("750x800")  # Slightly taller for new option
 
         style = ttk.Style()
         style.configure("TButton", font=("Helvetica", 10), padding=5)
@@ -43,7 +43,7 @@ class LeadScraperApp:
         self.mode_combo.pack(anchor="w", pady=(0, 10))
         self.mode_combo.bind("<<ComboboxSelected>>", self.toggle_inputs)
 
-        # 2. Main Input Frame (Changes based on mode)
+        # 2. Main Input Frame
         self.dynamic_frame = ttk.Frame(input_frame)
         self.dynamic_frame.pack(fill="x", pady=(0, 10))
 
@@ -58,12 +58,12 @@ class LeadScraperApp:
         self.settings_frame = ttk.Frame(input_frame)
         self.settings_frame.pack(anchor="w", pady=(0, 10))
 
-        # Max Results (Only for Keyword mode)
+        # Max Results / Pages
         self.limit_lbl = ttk.Label(self.settings_frame, text="Max Results:")
         self.limit_entry = ttk.Entry(self.settings_frame, width=10)
         self.limit_entry.insert(0, "50")
 
-        # Threads (New!)
+        # Threads
         ttk.Label(self.settings_frame, text="   Active Bots (Threads):").pack(
             side="left"
         )
@@ -82,6 +82,18 @@ class LeadScraperApp:
             font=("Helvetica", 9, "bold"),
         )
         self.warning_label.pack(side="left", padx=10)
+
+        # --- NEW: Output Format Options ---
+        self.format_frame = ttk.Frame(input_frame)
+        self.format_frame.pack(anchor="w", pady=(5, 0))
+
+        self.explode_var = tk.BooleanVar(value=True)  # Default to True (Excel Friendly)
+        self.explode_chk = ttk.Checkbutton(
+            self.format_frame,
+            text="Excel Friendly (One email per row)",
+            variable=self.explode_var,
+        )
+        self.explode_chk.pack(side="left")
 
         # Default View
         self.toggle_inputs()
@@ -122,37 +134,33 @@ class LeadScraperApp:
         self.status_bar.pack(fill="x", side="bottom")
 
     def update_thread_warning(self, event: Optional[tk.Event] = None) -> None:
-        """Updates the warning label based on thread count."""
         try:
             val_str = self.thread_entry.get()
             if not val_str:
                 self.warning_label.config(text="", fg="black")
                 return
-
             val = int(val_str)
-
             if val <= 4:
                 self.warning_label.config(text="✅ Safe Mode (Low RAM)", fg="green")
             elif 5 <= val <= 9:
                 self.warning_label.config(
                     text="⚠️ High Performance (Fans might spin)", fg="#d35400"
-                )  # Dark Orange
+                )
             else:
                 self.warning_label.config(text="🔥 DANGER: May freeze PC!", fg="red")
         except ValueError:
             self.warning_label.config(text="❌ Invalid Number", fg="red")
 
     def toggle_inputs(self, event: Optional[tk.Event] = None) -> None:
-        """Redraws the input fields based on the selected mode."""
         mode = self.mode_var.get()
 
         # Clear dynamic frame
         for widget in self.dynamic_frame.winfo_children():
             widget.pack_forget()
 
-        # Reset specific settings visibility
-        self.limit_lbl.pack_forget()
-        self.limit_entry.pack_forget()
+        # Default Limit Label
+        self.limit_lbl.pack(side="left")
+        self.limit_entry.pack(side="left", padx=5)
 
         if mode == "Keyword Search":
             self.input_label.config(text="Search Query:")
@@ -160,17 +168,20 @@ class LeadScraperApp:
             self.input_entry.delete(0, tk.END)
             self.input_entry.insert(0, "Firma budowlana Warszawa")
             self.input_entry.pack(fill="x")
-
-            # Show Max Results field
-            self.limit_lbl.pack(side="left")
-            self.limit_entry.pack(side="left", padx=5)
+            self.limit_lbl.config(text="Max Results:")
 
         elif mode == "Scrape Event URL":
-            self.input_label.config(text="Event Website URL:")
+            self.input_label.config(text="Event Website URL (with ?page=1):")
             self.input_label.pack(anchor="w")
             self.input_entry.delete(0, tk.END)
-            self.input_entry.insert(0, "https://trakoexpo.com/wystawcy")
+            self.input_entry.insert(
+                0,
+                "https://light-building.messefrankfurt.com/frankfurt/en/exhibitor-search.html?page=1",  # noqa: E501
+            )
             self.input_entry.pack(fill="x")
+            self.limit_lbl.config(text="Pages to Scan:")
+            self.limit_entry.delete(0, tk.END)
+            self.limit_entry.insert(0, "5")
 
         elif "Import" in mode:
             self.input_label.config(text="Select File (.csv/.txt):")
@@ -178,6 +189,9 @@ class LeadScraperApp:
             self.input_entry.delete(0, tk.END)
             self.input_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
             self.browse_btn.pack(side="right")
+            # Hide limit for import
+            self.limit_lbl.pack_forget()
+            self.limit_entry.pack_forget()
 
     def generate_default_filename(self) -> None:
         default_name = f"leads_{int(time.time())}.csv"
@@ -218,7 +232,6 @@ class LeadScraperApp:
         limit = 0
         threads = 1
 
-        # Validations
         if not input_val:
             messagebox.showerror("Error", "Input cannot be empty.")
             return
@@ -227,25 +240,22 @@ class LeadScraperApp:
             threads = int(self.thread_entry.get())
             if threads < 1:
                 threads = 1
-            # Explicit confirmation if user ignores the Red Warning
             if threads >= 10:
                 if not messagebox.askyesno(
                     "Warning",
-                    f"⚠️ You chose {threads} bots.\n\n"
-                    "This requires massive RAM and CPU power.\n"
-                    "Your computer might freeze.\n\n"
-                    "Are you sure you want to continue?",
+                    f"⚠️ You chose {threads} bots.\nAre you sure you want to continue?",
                 ):
                     return
         except ValueError:
             messagebox.showerror("Error", "Threads must be a number.")
             return
 
-        if mode == "Keyword Search":
+        # Handle Limit / Pages
+        if mode != "Import Domain List (CSV/TXT)":
             try:
                 limit = int(self.limit_entry.get())
             except ValueError:
-                messagebox.showerror("Error", "Limit must be a number.")
+                messagebox.showerror("Error", "Limit/Pages must be a number.")
                 return
 
         self.start_btn.config(state="disabled")
@@ -254,15 +264,24 @@ class LeadScraperApp:
         self.log_area.delete(1.0, tk.END)
         self.log_area.config(state="disabled")
 
+        # Pass explode var
+        explode = self.explode_var.get()
+
         thread = threading.Thread(
             target=self.run_process,
-            args=(mode, input_val, limit, threads, save_path),
+            args=(mode, input_val, limit, threads, save_path, explode),
             daemon=True,
         )
         thread.start()
 
     def run_process(
-        self, mode: str, input_val: str, limit: int, num_threads: int, save_path: str
+        self,
+        mode: str,
+        input_val: str,
+        limit: int,
+        num_threads: int,
+        save_path: str,
+        explode_emails: bool,
     ) -> None:
         results: List[Dict[str, str]] = []
         domains: List[str] = []
@@ -274,8 +293,10 @@ class LeadScraperApp:
                 domains = get_search_results(input_val, num_results=limit)
 
             elif mode == "Scrape Event URL":
-                self.log("--- Phase 1: Scraping Event Site ---")
-                domains = get_event_domains(input_val, log_callback=self.log)
+                self.log(f"--- Phase 1: Scraping Event ({limit} pages) ---")
+                domains = get_event_domains(
+                    input_val, max_pages=limit, log_callback=self.log
+                )
 
             elif "Import" in mode:
                 self.log("--- Phase 1: Loading File ---")
@@ -308,39 +329,60 @@ class LeadScraperApp:
             for d in domains:
                 domain_queue.put(d)
 
-            # Thread-safe results list
             results_lock = threading.Lock()
 
-            # The Worker Function
             def worker(bot_id: int) -> None:
                 driver = setup_driver()
                 try:
                     while True:
                         try:
-                            # Get next domain, don't wait if empty
                             domain = domain_queue.get_nowait()
                         except queue.Empty:
-                            break  # Queue is empty, bot is done
+                            break
 
                         self.log(f"[Bot-{bot_id}] Visiting {domain}...")
                         try:
                             data = scrape_domain(driver, domain)
 
                             addr_list = list(data["address"])
-                            row = {
-                                "Domain": domain,
-                                "Emails": ", ".join(data["emails"]),
-                                "Phones": ", ".join(data["phones"]),
-                                "Address Snippet": addr_list[0] if addr_list else "",
-                            }
+                            addr_str = addr_list[0] if addr_list else ""
+                            phones_str = ", ".join(data["phones"])
+                            company_name = data.get("name", "Unknown")
+
+                            # --- LOGIC TO EXPLODE OR COMPACT ---
+                            rows_to_add = []
+
+                            if explode_emails and data["emails"]:
+                                # Create one row per email
+                                for email in data["emails"]:
+                                    rows_to_add.append(
+                                        {
+                                            "Company Name": company_name,
+                                            "Domain": domain,
+                                            "Emails": email,  # Single email
+                                            "Phones": phones_str,
+                                            "Address Snippet": addr_str,
+                                        }
+                                    )
+                            else:
+                                # Standard Mode (Comma separated)
+                                rows_to_add.append(
+                                    {
+                                        "Company Name": company_name,
+                                        "Domain": domain,
+                                        "Emails": ", ".join(data["emails"]),
+                                        "Phones": phones_str,
+                                        "Address Snippet": addr_str,
+                                    }
+                                )
 
                             with results_lock:
-                                results.append(row)
+                                results.extend(rows_to_add)
 
                             if data["emails"]:
-                                self.log(f"[Bot-{bot_id}] + Email: {row['Emails']}")
-                            if data["phones"]:
-                                self.log(f"[Bot-{bot_id}] + Phone: {row['Phones']}")
+                                self.log(
+                                    f"[Bot-{bot_id}] + Emails Found: {len(data['emails'])}"  # noqa: E501
+                                )
 
                         except Exception as e:
                             self.log(f"[Bot-{bot_id}] Error: {e}")
@@ -351,21 +393,19 @@ class LeadScraperApp:
                 finally:
                     driver.quit()
 
-            # Spawn Threads
             threads_list = []
             for i in range(num_threads):
                 t = threading.Thread(target=worker, args=(i + 1,))
                 t.start()
                 threads_list.append(t)
 
-            # Wait for all threads
             for t in threads_list:
                 t.join()
 
             self.log("All bots finished.")
             self.save_to_csv(results, save_path)
-            self.log(f"\n[SUCCESS] Saved {len(results)} leads to: {save_path}")
-            messagebox.showinfo("Success", f"Done! Saved {len(results)} leads.")
+            self.log(f"\n[SUCCESS] Saved {len(results)} rows to: {save_path}")
+            messagebox.showinfo("Success", f"Done! Saved {len(results)} rows.")
 
         except Exception as e:
             self.log(f"CRITICAL ERROR: {e}")
@@ -377,9 +417,7 @@ class LeadScraperApp:
     def save_to_csv(self, data: List[Dict[str, str]], filename: str) -> None:
         if not data:
             return
-        headers = ["Domain", "Emails", "Phones", "Address Snippet"]
-        # 'w' mode overwrites. For incremental, we'd need more logic,
-        # but for this batch approach, overwriting at the end is fine.
+        headers = ["Company Name", "Domain", "Emails", "Phones", "Address Snippet"]
         with open(filename, mode="w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=headers)
             writer.writeheader()
