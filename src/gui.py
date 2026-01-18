@@ -17,7 +17,7 @@ class LeadScraperApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("Robotic Intern - Lead Scraper (Multi-Threaded)")
-        self.root.geometry("750x750")
+        self.root.geometry("750x800")  # Slightly taller for new option
 
         style = ttk.Style()
         style.configure("TButton", font=("Helvetica", 10), padding=5)
@@ -43,7 +43,7 @@ class LeadScraperApp:
         self.mode_combo.pack(anchor="w", pady=(0, 10))
         self.mode_combo.bind("<<ComboboxSelected>>", self.toggle_inputs)
 
-        # 2. Main Input Frame (Changes based on mode)
+        # 2. Main Input Frame
         self.dynamic_frame = ttk.Frame(input_frame)
         self.dynamic_frame.pack(fill="x", pady=(0, 10))
 
@@ -82,6 +82,18 @@ class LeadScraperApp:
             font=("Helvetica", 9, "bold"),
         )
         self.warning_label.pack(side="left", padx=10)
+
+        # --- NEW: Output Format Options ---
+        self.format_frame = ttk.Frame(input_frame)
+        self.format_frame.pack(anchor="w", pady=(5, 0))
+
+        self.explode_var = tk.BooleanVar(value=True)  # Default to True (Excel Friendly)
+        self.explode_chk = ttk.Checkbutton(
+            self.format_frame,
+            text="Excel Friendly (One email per row)",
+            variable=self.explode_var,
+        )
+        self.explode_chk.pack(side="left")
 
         # Default View
         self.toggle_inputs()
@@ -252,15 +264,24 @@ class LeadScraperApp:
         self.log_area.delete(1.0, tk.END)
         self.log_area.config(state="disabled")
 
+        # Pass explode var
+        explode = self.explode_var.get()
+
         thread = threading.Thread(
             target=self.run_process,
-            args=(mode, input_val, limit, threads, save_path),
+            args=(mode, input_val, limit, threads, save_path, explode),
             daemon=True,
         )
         thread.start()
 
     def run_process(
-        self, mode: str, input_val: str, limit: int, num_threads: int, save_path: str
+        self,
+        mode: str,
+        input_val: str,
+        limit: int,
+        num_threads: int,
+        save_path: str,
+        explode_emails: bool,
     ) -> None:
         results: List[Dict[str, str]] = []
         domains: List[str] = []
@@ -273,7 +294,6 @@ class LeadScraperApp:
 
             elif mode == "Scrape Event URL":
                 self.log(f"--- Phase 1: Scraping Event ({limit} pages) ---")
-                # Pass limit as max_pages
                 domains = get_event_domains(
                     input_val, max_pages=limit, log_callback=self.log
                 )
@@ -325,19 +345,44 @@ class LeadScraperApp:
                             data = scrape_domain(driver, domain)
 
                             addr_list = list(data["address"])
-                            row = {
-                                "Company Name": data.get("name", "Unknown"),
-                                "Domain": domain,
-                                "Emails": ", ".join(data["emails"]),
-                                "Phones": ", ".join(data["phones"]),
-                                "Address Snippet": addr_list[0] if addr_list else "",
-                            }
+                            addr_str = addr_list[0] if addr_list else ""
+                            phones_str = ", ".join(data["phones"])
+                            company_name = data.get("name", "Unknown")
+
+                            # --- LOGIC TO EXPLODE OR COMPACT ---
+                            rows_to_add = []
+
+                            if explode_emails and data["emails"]:
+                                # Create one row per email
+                                for email in data["emails"]:
+                                    rows_to_add.append(
+                                        {
+                                            "Company Name": company_name,
+                                            "Domain": domain,
+                                            "Emails": email,  # Single email
+                                            "Phones": phones_str,
+                                            "Address Snippet": addr_str,
+                                        }
+                                    )
+                            else:
+                                # Standard Mode (Comma separated)
+                                rows_to_add.append(
+                                    {
+                                        "Company Name": company_name,
+                                        "Domain": domain,
+                                        "Emails": ", ".join(data["emails"]),
+                                        "Phones": phones_str,
+                                        "Address Snippet": addr_str,
+                                    }
+                                )
 
                             with results_lock:
-                                results.append(row)
+                                results.extend(rows_to_add)
 
                             if data["emails"]:
-                                self.log(f"[Bot-{bot_id}] + Email: {row['Emails']}")
+                                self.log(
+                                    f"[Bot-{bot_id}] + Emails Found: {len(data['emails'])}"  # noqa: E501
+                                )
 
                         except Exception as e:
                             self.log(f"[Bot-{bot_id}] Error: {e}")
@@ -359,8 +404,8 @@ class LeadScraperApp:
 
             self.log("All bots finished.")
             self.save_to_csv(results, save_path)
-            self.log(f"\n[SUCCESS] Saved {len(results)} leads to: {save_path}")
-            messagebox.showinfo("Success", f"Done! Saved {len(results)} leads.")
+            self.log(f"\n[SUCCESS] Saved {len(results)} rows to: {save_path}")
+            messagebox.showinfo("Success", f"Done! Saved {len(results)} rows.")
 
         except Exception as e:
             self.log(f"CRITICAL ERROR: {e}")
@@ -372,7 +417,6 @@ class LeadScraperApp:
     def save_to_csv(self, data: List[Dict[str, str]], filename: str) -> None:
         if not data:
             return
-        # Updated Headers
         headers = ["Company Name", "Domain", "Emails", "Phones", "Address Snippet"]
         with open(filename, mode="w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=headers)
