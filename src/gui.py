@@ -5,7 +5,7 @@ import threading
 import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 # Import modules
 from search_clients import get_search_results
@@ -17,7 +17,7 @@ class LeadScraperApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("Robotic Intern - Lead Scraper (Multi-Threaded)")
-        self.root.geometry("750x800")  # Slightly taller for new option
+        self.root.geometry("750x800")
 
         style = ttk.Style()
         style.configure("TButton", font=("Helvetica", 10), padding=5)
@@ -71,7 +71,6 @@ class LeadScraperApp:
         self.thread_entry.insert(0, "4")
         self.thread_entry.pack(side="left", padx=5)
 
-        # Bind key release to check value dynamically
         self.thread_entry.bind("<KeyRelease>", self.update_thread_warning)
 
         # Dynamic Warning Label
@@ -83,17 +82,27 @@ class LeadScraperApp:
         )
         self.warning_label.pack(side="left", padx=10)
 
-        # --- NEW: Output Format Options ---
+        # --- Output Format Options ---
         self.format_frame = ttk.Frame(input_frame)
         self.format_frame.pack(anchor="w", pady=(5, 0))
 
-        self.explode_var = tk.BooleanVar(value=True)  # Default to True (Excel Friendly)
+        # Checkbox 1: Explode (Excel Friendly)
+        self.explode_var = tk.BooleanVar(value=True)
         self.explode_chk = ttk.Checkbutton(
             self.format_frame,
             text="Excel Friendly (One email per row)",
             variable=self.explode_var,
         )
         self.explode_chk.pack(side="left")
+
+        # Checkbox 2: Deduplicate (NEW!)
+        self.dedupe_var = tk.BooleanVar(value=True)
+        self.dedupe_chk = ttk.Checkbutton(
+            self.format_frame,
+            text="Remove Duplicates",
+            variable=self.dedupe_var,
+        )
+        self.dedupe_chk.pack(side="left", padx=10)
 
         # Default View
         self.toggle_inputs()
@@ -154,11 +163,9 @@ class LeadScraperApp:
     def toggle_inputs(self, event: Optional[tk.Event] = None) -> None:
         mode = self.mode_var.get()
 
-        # Clear dynamic frame
         for widget in self.dynamic_frame.winfo_children():
             widget.pack_forget()
 
-        # Default Limit Label
         self.limit_lbl.pack(side="left")
         self.limit_entry.pack(side="left", padx=5)
 
@@ -176,7 +183,7 @@ class LeadScraperApp:
             self.input_entry.delete(0, tk.END)
             self.input_entry.insert(
                 0,
-                "https://light-building.messefrankfurt.com/frankfurt/en/exhibitor-search.html?page=1",  # noqa: E501
+                "https://light-building.messefrankfurt.com/frankfurt/en/exhibitor-search.html?page=1",  # noqa E501
             )
             self.input_entry.pack(fill="x")
             self.limit_lbl.config(text="Pages to Scan:")
@@ -189,7 +196,6 @@ class LeadScraperApp:
             self.input_entry.delete(0, tk.END)
             self.input_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
             self.browse_btn.pack(side="right")
-            # Hide limit for import
             self.limit_lbl.pack_forget()
             self.limit_entry.pack_forget()
 
@@ -250,7 +256,6 @@ class LeadScraperApp:
             messagebox.showerror("Error", "Threads must be a number.")
             return
 
-        # Handle Limit / Pages
         if mode != "Import Domain List (CSV/TXT)":
             try:
                 limit = int(self.limit_entry.get())
@@ -264,12 +269,12 @@ class LeadScraperApp:
         self.log_area.delete(1.0, tk.END)
         self.log_area.config(state="disabled")
 
-        # Pass explode var
         explode = self.explode_var.get()
+        dedupe = self.dedupe_var.get()
 
         thread = threading.Thread(
             target=self.run_process,
-            args=(mode, input_val, limit, threads, save_path, explode),
+            args=(mode, input_val, limit, threads, save_path, explode, dedupe),
             daemon=True,
         )
         thread.start()
@@ -282,22 +287,24 @@ class LeadScraperApp:
         num_threads: int,
         save_path: str,
         explode_emails: bool,
+        dedupe_emails: bool,
     ) -> None:
         results: List[Dict[str, str]] = []
         domains: List[str] = []
 
+        # Shared memory for deduplication
+        seen_emails: Set[str] = set()
+
         try:
-            # --- PHASE 1: ACQUIRE DOMAINS ---
+            # --- PHASE 1 ---
             if mode == "Keyword Search":
                 self.log(f"--- Phase 1: Keyword Search '{input_val}' ---")
                 domains = get_search_results(input_val, num_results=limit)
-
             elif mode == "Scrape Event URL":
                 self.log(f"--- Phase 1: Scraping Event ({limit} pages) ---")
                 domains = get_event_domains(
                     input_val, max_pages=limit, log_callback=self.log
                 )
-
             elif "Import" in mode:
                 self.log("--- Phase 1: Loading File ---")
                 try:
@@ -322,7 +329,7 @@ class LeadScraperApp:
                 self.log("No domains found. Stopping.")
                 return
 
-            # --- PHASE 2: MULTI-THREADED SCRAPING ---
+            # --- PHASE 2 ---
             self.log(f"\n--- Phase 2: Launching {num_threads} Bots ---")
 
             domain_queue: queue.Queue[str] = queue.Queue()
@@ -344,44 +351,55 @@ class LeadScraperApp:
                         try:
                             data = scrape_domain(driver, domain)
 
-                            addr_list = list(data["address"])
-                            addr_str = addr_list[0] if addr_list else ""
-                            phones_str = ", ".join(data["phones"])
-                            company_name = data.get("name", "Unknown")
+                            company_name = data.get("name", "Unknown").replace(
+                                "\n", " "
+                            )
 
-                            # --- LOGIC TO EXPLODE OR COMPACT ---
-                            rows_to_add = []
+                            with results_lock:
+                                # 1. Deduplication Logic
+                                final_emails = []
+                                if dedupe_emails:
+                                    for email in data["emails"]:
+                                        email_lower = email.lower()
+                                        if email_lower not in seen_emails:
+                                            seen_emails.add(email_lower)
+                                            final_emails.append(email)
+                                else:
+                                    final_emails = list(data["emails"])
 
-                            if explode_emails and data["emails"]:
-                                # Create one row per email
-                                for email in data["emails"]:
+                                has_emails = bool(final_emails)
+                                missing_flag = "NO" if has_emails else "YES"
+
+                                # 2. Row Generation
+                                rows_to_add = []
+
+                                if explode_emails and has_emails:
+                                    # Exploded Mode (One row per email)
+                                    for email in final_emails:
+                                        rows_to_add.append(
+                                            {
+                                                "Company Name": company_name,
+                                                "Domain": domain,
+                                                "Emails": email,
+                                                "Email Missing": "NO",
+                                            }
+                                        )
+                                else:
+                                    # Compact Mode or No Emails
                                     rows_to_add.append(
                                         {
                                             "Company Name": company_name,
                                             "Domain": domain,
-                                            "Emails": email,  # Single email
-                                            "Phones": phones_str,
-                                            "Address Snippet": addr_str,
+                                            "Emails": ", ".join(final_emails),
+                                            "Email Missing": missing_flag,
                                         }
                                     )
-                            else:
-                                # Standard Mode (Comma separated)
-                                rows_to_add.append(
-                                    {
-                                        "Company Name": company_name,
-                                        "Domain": domain,
-                                        "Emails": ", ".join(data["emails"]),
-                                        "Phones": phones_str,
-                                        "Address Snippet": addr_str,
-                                    }
-                                )
 
-                            with results_lock:
                                 results.extend(rows_to_add)
 
-                            if data["emails"]:
+                            if has_emails:
                                 self.log(
-                                    f"[Bot-{bot_id}] + Emails Found: {len(data['emails'])}"  # noqa: E501
+                                    f"[Bot-{bot_id}] + Emails Found: {len(final_emails)}"  # noqa E501
                                 )
 
                         except Exception as e:
@@ -417,9 +435,11 @@ class LeadScraperApp:
     def save_to_csv(self, data: List[Dict[str, str]], filename: str) -> None:
         if not data:
             return
-        headers = ["Company Name", "Domain", "Emails", "Phones", "Address Snippet"]
+        headers = ["Company Name", "Domain", "Emails", "Email Missing"]
+
+        # USE SEMICOLON DELIMITER FOR EUROPEAN EXCEL COMPATIBILITY
         with open(filename, mode="w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=headers)
+            writer = csv.DictWriter(f, fieldnames=headers, delimiter=";")
             writer.writeheader()
             for row in data:
                 writer.writerow(row)

@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import sys
@@ -35,7 +36,6 @@ def setup_driver() -> webdriver.Chrome:
 
 
 def clean_domain(url: str) -> str:
-    """Extracts just the 'company.com' part from a messy link."""
     try:
         if not url or "javascript" in url.lower() or "mailto" in url.lower():
             return ""
@@ -46,6 +46,33 @@ def clean_domain(url: str) -> str:
         return domain.replace("www.", "")
     except Exception:
         return ""
+
+
+def extract_ptak_expo_json(driver: webdriver.Chrome) -> List[str]:
+    """
+    Universal extractor for Ptak Warsaw Expo events.
+    They all share the same logic: <script id="exhibitorFiltersData">
+    """
+    try:
+        # This ID is the signature of Ptak Expo websites
+        script = driver.find_element(By.ID, "exhibitorFiltersData")
+        json_text = script.get_attribute("innerHTML")
+        data = json.loads(json_text)
+
+        links = []
+        # Base URL for the virtual link
+        base_url = driver.current_url.split("#")[0].split("?")[0]
+
+        for item in data.get("items", []):
+            exhibitor_id = item.get("id")
+            if exhibitor_id:
+                # Create "Virtual URL" with ID
+                links.append(f"{base_url}#ptak_id={exhibitor_id}")
+
+        return links
+    except Exception as e:
+        print(f"Ptak JSON error: {e}")
+        return []
 
 
 def scan_page_for_links(driver: webdriver.Chrome) -> Set[str]:
@@ -66,11 +93,8 @@ def scan_page_for_links(driver: webdriver.Chrome) -> Set[str]:
 
             domain = clean_domain(url)
 
-            # Strategy 1: External Website
             if domain and domain not in current_host:
                 found.add(domain)
-
-            # Strategy 2: Internal Profile Page
             elif domain and domain in current_host:
                 keywords = [
                     "detail",
@@ -91,7 +115,6 @@ def scan_page_for_links(driver: webdriver.Chrome) -> Set[str]:
 def try_pagination_click(
     driver: webdriver.Chrome, log_callback: Callable[[str], None]
 ) -> bool:
-    """Fallback: Attempts to find and click the 'Next' button."""
     xpaths = [
         "//a[contains(@class, 'next')]",
         "//li[contains(@class, 'next')]/a",
@@ -119,7 +142,6 @@ def try_pagination_click(
 
 
 def get_next_page_url(base_url: str, page_num: int) -> str:
-    """Updates the 'page' query parameter in a URL."""
     parsed = urlparse(base_url)
     query = parse_qs(parsed.query)
     query["page"] = [str(page_num)]
@@ -145,17 +167,41 @@ def get_event_domains(
     driver = setup_driver()
     all_domains: Set[str] = set()
 
-    # DETECT PAGINATION MODE
-    # If URL contains "page=", we use URL manipulation mode.
-    use_url_pagination = "page=" in target_url
-    if use_url_pagination:
-        log_callback(f"Detected URL pagination mode (Max: {max_pages} pages)")
-
     try:
-        if not use_url_pagination:
-            # Standard Mode (Click Buttons)
-            log_callback(f"Visiting: {target_url}")
-            driver.get(target_url)
+        log_callback(f"Visiting: {target_url}")
+        driver.get(target_url)
+        time.sleep(3)
+
+        # --- AUTO-DETECT PTAK WARSAW EXPO ---
+        # 1. Check for specific JSON element ID
+        # 2. Check if page contains link to warsawexpo.eu (as requested)
+        is_ptak = False
+        try:
+            if driver.find_elements(By.ID, "exhibitorFiltersData"):
+                is_ptak = True
+            else:
+                # Fallback: Check footer links
+                if driver.find_elements(By.CSS_SELECTOR, "a[href*='warsawexpo.eu']"):
+                    # It links to warsawexpo, but let's double check if the JSON exists
+                    if driver.find_elements(By.ID, "exhibitorFiltersData"):
+                        is_ptak = True
+        except Exception as e:
+            print(e)
+
+        if is_ptak:
+            log_callback("--- Detected 'Ptak Warsaw Expo' Database ---")
+            log_callback("Skipping manual scan. Extracting hidden database...")
+            links = extract_ptak_expo_json(driver)
+            log_callback(f"Success! Extracted {len(links)} exhibitors instantly.")
+            driver.quit()
+            return links
+        # ------------------------------------
+
+        # Standard Pagination Logic
+        use_url_pagination = "page=" in target_url
+        if use_url_pagination:
+            log_callback(f"Detected URL pagination mode (Max: {max_pages} pages)")
+        else:
             log_callback("⏳ Waiting for manual setup...")
             tkinter.messagebox.showinfo(
                 "Browser Paused",
@@ -164,24 +210,17 @@ def get_event_domains(
 
         for page_num in range(1, max_pages + 1):
             if use_url_pagination:
-                # URL Mode: Navigate directly
                 current_url = get_next_page_url(target_url, page_num)
                 log_callback(f"--- Visiting Page {page_num}: {current_url} ---")
                 driver.get(current_url)
-                if page_num == 1:
-                    time.sleep(5)  # Wait longer on first page
-                else:
-                    time.sleep(3)
+                time.sleep(3 if page_num > 1 else 5)
             else:
-                # Button Mode
                 log_callback(f"--- Processing Page {page_num} ---")
 
-            # Scrape
             new_links = scan_page_for_links(driver)
             log_callback(f"   Found {len(new_links)} links.")
             all_domains.update(new_links)
 
-            # Check iframes
             iframes = driver.find_elements(By.TAG_NAME, "iframe")
             if iframes:
                 for i, iframe in enumerate(iframes):
@@ -194,7 +233,6 @@ def get_event_domains(
                     except Exception:
                         driver.switch_to.default_content()
 
-            # Handle Transition
             if not use_url_pagination:
                 if not try_pagination_click(driver, log_callback):
                     log_callback("--- No 'Next' button found. Stopping. ---")
