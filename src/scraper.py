@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import re
@@ -27,7 +28,7 @@ EMAIL_REGEX = r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
 
 def setup_driver() -> webdriver.Chrome:
     chrome_options = Options()
-    chrome_options.add_argument("--headless")
+    # chrome_options.add_argument("--headless")
     chrome_options.add_argument("--start-maximized")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
@@ -49,7 +50,6 @@ def extract_info_from_text(text: str) -> Dict[str, Set[str]]:
 def extract_info_from_links(driver: webdriver.Chrome) -> Dict[str, Set[str]]:
     results: Dict[str, Set[str]] = {"emails": set()}
     try:
-        # Mailto
         for el in driver.find_elements(By.XPATH, '//a[starts-with(@href, "mailto:")]'):
             href = el.get_attribute("href")
             if href:
@@ -62,13 +62,9 @@ def extract_info_from_links(driver: webdriver.Chrome) -> Dict[str, Set[str]]:
 
 
 def handle_event_profile(driver: webdriver.Chrome) -> Dict[str, Set[str]]:
-    """
-    Specific extractor for EuroShop / Messe Frankfurt / Light+Building profiles.
-    """
+    """Generic Event Extractor (EuroShop / Messe)"""
     results: Dict[str, Set[str]] = {"emails": set()}
-
     try:
-        # 1. Try to click "Company data" tab button
         buttons = driver.find_elements(By.TAG_NAME, "button")
         for btn in buttons:
             txt = btn.text.lower()
@@ -79,36 +75,71 @@ def handle_event_profile(driver: webdriver.Chrome) -> Dict[str, Set[str]]:
                 except Exception:
                     pass
 
-        # 2. Extract Email from class="exh-contact__email"
         emails = driver.find_elements(By.CLASS_NAME, "exh-contact__email")
         for e in emails:
             clean = e.text.replace("E-mail:", "").replace("E-Mail:", "").strip()
             if "@" in clean:
                 results["emails"].add(clean)
+    except Exception:
+        pass
+    return results
+
+
+def handle_ptak_expo_profile(driver: webdriver.Chrome, url: str) -> Dict[str, Any]:
+    """
+    Extracts data from the Ptak Warsaw Expo JSON database.
+    Requires URL format: ...#ptak_id=123
+    """
+    results: Dict[str, Any] = {"emails": set(), "name": ""}
+
+    if "#ptak_id=" not in url:
+        return results
+
+    try:
+        # Robust ID extraction (handles junk at end of URL)
+        # Splits by #ptak_id=, takes right side, then splits by anything not a digit
+        raw_id_part = url.split("#ptak_id=")[1]
+        # Take only the first sequence of digits found
+        match = re.search(r"^\d+", raw_id_part)
+        target_id = match.group(0) if match else raw_id_part
+
+        try:
+            script = driver.find_element(By.ID, "exhibitorFiltersData")
+        except:  # noqa E722
+            return results
+
+        json_text = script.get_attribute("innerHTML")
+        data = json.loads(json_text)
+
+        for item in data.get("items", []):
+            if str(item.get("id")) == str(target_id):
+                comp_data = item.get("data", {})
+
+                results["name"] = comp_data.get("name", "")
+
+                email = comp_data.get("contact_email")
+                if email and "@" in email:
+                    clean_email = email.split(" ")[0].strip()
+                    results["emails"].add(clean_email)
+                return results  # Return immediately once found
 
     except Exception as e:
-        print(f"   [Event Profile Logic Error]: {e}")
+        print(f"   [Ptak JSON Error]: {e}")
 
     return results
 
 
 def get_company_name(driver: webdriver.Chrome) -> str:
     name = "Unknown"
+    # Try H1
     try:
-        h1 = driver.find_element(By.CSS_SELECTOR, "h1.profile-head__name").text.strip()
+        h1 = driver.find_element(By.TAG_NAME, "h1").text.strip()
         if h1:
             name = h1
-    except Exception:
+    except:  # noqa E722
         pass
 
-    if name == "Unknown":
-        try:
-            h1 = driver.find_element(By.TAG_NAME, "h1").text.strip()
-            if h1:
-                name = h1
-        except Exception:
-            pass
-
+    # Try Title
     if name == "Unknown":
         try:
             title = driver.title
@@ -116,10 +147,9 @@ def get_company_name(driver: webdriver.Chrome) -> str:
                 name = title.split("|")[0].strip()
             else:
                 name = title
-        except Exception:
+        except:  # noqa E722
             pass
 
-    # Sanitize for CSV
     return name.replace("\n", " ").replace("\r", "").replace("\t", " ").strip()
 
 
@@ -137,32 +167,40 @@ def scrape_domain(driver: webdriver.Chrome, domain: str) -> Dict[str, Any]:
 
     try:
         driver.get(url)
-        time.sleep(3)  # Wait for SPA load
+        time.sleep(3)
 
-        # 1. Get Name
+        # --- 1. PTAK / FRANCZYZA MODE (Strict) ---
+        # If this is a Ptak virtual link, ONLY read the JSON.
+        # Do NOT scan the page text (which contains all other exhibitors).
+        if "#ptak_id=" in url:
+            ptak_data = handle_ptak_expo_profile(driver, url)
+            if ptak_data.get("name"):
+                data["name"] = ptak_data["name"]
+                update(ptak_data)
+                return data  # <--- CRITICAL: STOP HERE
+        # -----------------------------------------
+
+        # --- 2. STANDARD MODE (Regular Websites) ---
         data["name"] = get_company_name(driver)
 
-        # 2. Run Specialized Event Extractor (EuroShop/Messe)
+        # Specialized Extractors (EuroShop etc)
         update(handle_event_profile(driver))
 
-        # 3. Generic Scrape (Visible Text)
+        # General Extractors
         try:
             page_text = driver.find_element(By.TAG_NAME, "body").text
             update(extract_info_from_text(page_text))
-        except Exception:
+        except:  # noqa E722
             pass
 
-        # 4. Deep Scrape (Hidden HTML)
         try:
-            html_source = driver.page_source
-            update(extract_info_from_text(html_source))
-        except Exception:
+            update(extract_info_from_text(driver.page_source))
+        except:  # noqa E722
             pass
 
-        # 5. Link Attributes (mailto)
         update(extract_info_from_links(driver))
 
-        # 6. Fallback: Contact Pages
+        # Fallback to Contact Pages
         if "messe" not in url and "euroshop" not in url:
             if not data["emails"]:
                 for path in ["/kontakt", "/contact", "/about", "/o-nas", "/impressum"]:
@@ -172,12 +210,11 @@ def scrape_domain(driver: webdriver.Chrome, domain: str) -> Dict[str, Any]:
                         base_url = "/".join(url.split("/")[:3])
                         driver.get(f"{base_url}{path}")
                         time.sleep(2)
-
                         update(extract_info_from_text(driver.page_source))
                         update(extract_info_from_links(driver))
                         if data["emails"]:
                             break
-                    except Exception:
+                    except:  # noqa E722
                         continue
 
     except Exception as e:

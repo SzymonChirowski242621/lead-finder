@@ -5,7 +5,7 @@ import threading
 import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 # Import modules
 from search_clients import get_search_results
@@ -86,13 +86,23 @@ class LeadScraperApp:
         self.format_frame = ttk.Frame(input_frame)
         self.format_frame.pack(anchor="w", pady=(5, 0))
 
-        self.explode_var = tk.BooleanVar(value=True)  # Default to True (Excel Friendly)
+        # Checkbox 1: Explode (Excel Friendly)
+        self.explode_var = tk.BooleanVar(value=True)
         self.explode_chk = ttk.Checkbutton(
             self.format_frame,
             text="Excel Friendly (One email per row)",
             variable=self.explode_var,
         )
         self.explode_chk.pack(side="left")
+
+        # Checkbox 2: Deduplicate (NEW!)
+        self.dedupe_var = tk.BooleanVar(value=True)
+        self.dedupe_chk = ttk.Checkbutton(
+            self.format_frame,
+            text="Remove Duplicates",
+            variable=self.dedupe_var,
+        )
+        self.dedupe_chk.pack(side="left", padx=10)
 
         # Default View
         self.toggle_inputs()
@@ -173,7 +183,7 @@ class LeadScraperApp:
             self.input_entry.delete(0, tk.END)
             self.input_entry.insert(
                 0,
-                "https://light-building.messefrankfurt.com/frankfurt/en/exhibitor-search.html?page=1",  # noqa: E501
+                "https://light-building.messefrankfurt.com/frankfurt/en/exhibitor-search.html?page=1",  # noqa E501
             )
             self.input_entry.pack(fill="x")
             self.limit_lbl.config(text="Pages to Scan:")
@@ -260,10 +270,11 @@ class LeadScraperApp:
         self.log_area.config(state="disabled")
 
         explode = self.explode_var.get()
+        dedupe = self.dedupe_var.get()
 
         thread = threading.Thread(
             target=self.run_process,
-            args=(mode, input_val, limit, threads, save_path, explode),
+            args=(mode, input_val, limit, threads, save_path, explode, dedupe),
             daemon=True,
         )
         thread.start()
@@ -276,9 +287,13 @@ class LeadScraperApp:
         num_threads: int,
         save_path: str,
         explode_emails: bool,
+        dedupe_emails: bool,
     ) -> None:
         results: List[Dict[str, str]] = []
         domains: List[str] = []
+
+        # Shared memory for deduplication
+        seen_emails: Set[str] = set()
 
         try:
             # --- PHASE 1 ---
@@ -340,40 +355,51 @@ class LeadScraperApp:
                                 "\n", " "
                             )
 
-                            # LOGIC FOR EMAIL MISSING
-                            has_emails = bool(data["emails"])
-                            missing_flag = "NO" if has_emails else "YES"
+                            with results_lock:
+                                # 1. Deduplication Logic
+                                final_emails = []
+                                if dedupe_emails:
+                                    for email in data["emails"]:
+                                        email_lower = email.lower()
+                                        if email_lower not in seen_emails:
+                                            seen_emails.add(email_lower)
+                                            final_emails.append(email)
+                                else:
+                                    final_emails = list(data["emails"])
 
-                            rows_to_add = []
+                                has_emails = bool(final_emails)
+                                missing_flag = "NO" if has_emails else "YES"
 
-                            if explode_emails and has_emails:
-                                # One row per email
-                                for email in data["emails"]:
+                                # 2. Row Generation
+                                rows_to_add = []
+
+                                if explode_emails and has_emails:
+                                    # Exploded Mode (One row per email)
+                                    for email in final_emails:
+                                        rows_to_add.append(
+                                            {
+                                                "Company Name": company_name,
+                                                "Domain": domain,
+                                                "Emails": email,
+                                                "Email Missing": "NO",
+                                            }
+                                        )
+                                else:
+                                    # Compact Mode or No Emails
                                     rows_to_add.append(
                                         {
                                             "Company Name": company_name,
                                             "Domain": domain,
-                                            "Emails": email,
-                                            "Email Missing": "NO",
+                                            "Emails": ", ".join(final_emails),
+                                            "Email Missing": missing_flag,
                                         }
                                     )
-                            else:
-                                # Compact mode OR No emails found
-                                rows_to_add.append(
-                                    {
-                                        "Company Name": company_name,
-                                        "Domain": domain,
-                                        "Emails": ", ".join(data["emails"]),
-                                        "Email Missing": missing_flag,
-                                    }
-                                )
 
-                            with results_lock:
                                 results.extend(rows_to_add)
 
                             if has_emails:
                                 self.log(
-                                    f"[Bot-{bot_id}] + Emails Found: {len(data['emails'])}"  # noqa: E501
+                                    f"[Bot-{bot_id}] + Emails Found: {len(final_emails)}"  # noqa E501
                                 )
 
                         except Exception as e:
